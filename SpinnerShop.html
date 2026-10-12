@@ -1,0 +1,710 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>SpinnerShop</title>
+<style>
+  /* Inputs are pure black/white; intermediate shades are spread between them and the page (--bg) */
+  :root {
+    color-scheme: dark;
+    --bg: #3a3a3a;
+    --fg: #eee;
+    --surface: #000;
+    --popup: #222; /* pickers, and the pencil tab on hover/while open: a step off the inputs */
+    --border: #555;
+    --anim-bg: #000;
+    --muted: #bbb;
+    --faint: #999;
+    --dashed: #777;
+    --hover-fg: #fff;
+    --hover-bg: #151515;
+    --list-hover: #3a3a3a;
+    --list-selected: #4a4a4a;
+    --danger: #f66;
+    --focus: #6ea8fe;
+  }
+  :root[data-theme="light"] {
+    color-scheme: light;
+    --bg: #e4e4e4;
+    --fg: #222;
+    --surface: #fff;
+    --popup: #f1f1f1;
+    --border: #aaa;
+    --anim-bg: #fff;
+    --muted: #555;
+    --faint: #777;
+    --dashed: #888;
+    --hover-fg: #000;
+    --hover-bg: #c9c9c9;
+    --list-hover: #e4e4e4;
+    --list-selected: #c2c2c2;
+    --danger: #d22;
+    --focus: #2563eb;
+  }
+  body {
+    margin: 0;
+    padding: 2rem;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    font-family: system-ui, sans-serif;
+    background: var(--bg);
+    color: var(--fg);
+  }
+  input {
+    font-size: 1.25rem;
+    line-height: 1.2;
+    padding: 0.5rem 0.75rem;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    background: var(--surface);
+    color: inherit;
+  }
+  /* our own single-colour focus ring, replacing Chrome's two-tone one */
+  input:focus, select:focus { outline: 2px solid var(--focus); outline-offset: -1px; }
+  .text {
+    font-family: ui-monospace, monospace;
+    width: var(--text-width, 6ch);
+    padding-right: 2.15rem; /* room for the pencil */
+  }
+  .text-wrap { position: relative; justify-self: start; }
+  .edit {
+    /* full-height segment at the input's right end, divided off from the text */
+    position: absolute;
+    top: 1px;
+    bottom: 1px;
+    right: 1px;
+    background: var(--surface);
+    border: none;
+    border-left: 1px solid var(--border);
+    border-radius: 0 5px 5px 0; /* inside the input's 6px corners */
+    padding: 0 0.3rem;
+    align-items: center;
+    color: var(--faint);
+    cursor: pointer;
+    display: flex;
+  }
+  .edit:hover, .edit.active { color: var(--hover-fg); background: var(--popup); } /* .active: its picker is open */
+  .char {
+    font-size: 1.25rem;
+    width: 1em;
+    height: 1.2em;
+    line-height: 1.2;
+    white-space: pre;
+    text-align: left; /* uncentred, so varying glyph widths show up as jitter */
+    padding: 0.5rem 0.75rem;
+    margin: 1px; /* in place of the inputs' border, to keep the same row height */
+    background: var(--anim-bg);
+  }
+  main {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 2rem;
+  }
+  #rows {
+    display: grid;
+    /* grid-template-columns is set from JS as columns are added */
+    align-items: center;
+    justify-items: center;
+    gap: 0.6rem 1rem;
+  }
+  .row { display: contents; }
+  .header { color: var(--muted); font-size: 0.9rem; }
+  .text-wrap, .frames-label { grid-column: 1; } /* each row starts in column 1 */
+  .frames-label { justify-self: start; }
+  #add {
+    font: inherit;
+    font-size: 0.9rem;
+    color: var(--muted);
+    background: none;
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 0 0.4rem;
+    cursor: pointer;
+  }
+  #add:hover { color: var(--hover-fg); background: var(--hover-bg); }
+  .trash {
+    background: none;
+    border: none;
+    padding: 0.25rem;
+    color: var(--faint);
+    cursor: pointer;
+    display: flex;
+  }
+  .trash:hover { color: var(--danger); }
+  .font-pick {
+    font: inherit;
+    color: inherit;
+    background: none;
+    border: none;
+    border-bottom: 1px dashed var(--dashed);
+    padding: 0;
+    cursor: pointer;
+  }
+  .font-pick:hover { color: var(--hover-fg); }
+  dialog {
+    inset: auto;
+    margin: 0;
+    box-sizing: border-box;
+    padding: 1rem;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    background: var(--popup);
+    color: inherit;
+  }
+  dialog[open] { display: flex; flex-direction: column; }
+  dialog::backdrop { background: none; }
+  #font-filter { width: 20rem; box-sizing: border-box; }
+  /* absolute (not fixed): scrolls with the page, which grows to fit it, so the grid never scrolls itself */
+  #char-picker { position: absolute; max-height: none; border-top-left-radius: 0; overflow: visible; } /* visible: let #char-tab-gap cover the border */
+  #char-tab-gap {
+    /* covers the picker's top border under the pencil, so the pencil reads as its tab */
+    position: absolute;
+    top: -1px;
+    height: 1px;
+    background: var(--popup);
+  }
+  #char-controls { display: flex; gap: 0.5rem; }
+  #char-block, #char-code {
+    font-size: 1rem;
+    padding: 0.3rem 0.5rem;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    background: var(--surface);
+    color: inherit;
+  }
+  #char-block { flex: 1; }
+  #char-delete {
+    font-size: 1.1rem;
+    padding: 0 0.6rem;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    background: var(--surface);
+    color: inherit;
+    cursor: pointer;
+  }
+  #char-delete:hover { background: var(--list-hover); }
+  #char-code { width: 7rem; font-family: ui-monospace, monospace; }
+  #char-grid {
+    display: grid;
+    grid-template-columns: repeat(16, 2.4rem);
+    grid-auto-rows: 2.4rem;
+    margin: 0 -1rem -1rem;
+    padding: 0.5rem 1rem 1rem;
+  }
+  #char-grid button {
+    font: 1.5rem ui-monospace, monospace;
+    background: none;
+    border: none;
+    border-radius: 4px;
+    padding: 0;
+    color: inherit;
+    cursor: pointer;
+  }
+  #char-grid button:hover, #char-grid button:focus { background: var(--list-hover); outline: none; }
+  #char-grid button { position: relative; }
+  #char-grid button:hover::after {
+    /* zoomed preview, tight around the glyph; ignores the mouse so neighbours stay reachable */
+    content: attr(data-ch);
+    position: absolute;
+    left: 50%;
+    top: 50%;
+    transform: translate(-50%, -50%);
+    z-index: 1;
+    font-size: 3rem;
+    line-height: 1;
+    padding: 0.05em 0.1em;
+    background: var(--surface);
+    box-shadow: 0 0 0 1px var(--border), 0 2px 6px rgb(0 0 0 / 0.3);
+    border-radius: 4px;
+    white-space: pre;
+    pointer-events: none;
+  }
+  #font-list {
+    width: 20rem;
+    height: 20rem;
+    min-height: 0;
+    flex-shrink: 1;
+    overflow-y: auto;
+    margin-top: 0.5rem;
+    display: flex;
+    flex-direction: column;
+  }
+  #font-list .section {
+    font-size: 0.8rem;
+    color: var(--faint);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    padding: 0.6rem 0.5rem 0.2rem;
+  }
+  #font-list .section:first-child { padding-top: 0; }
+  #font-list button {
+    text-align: left;
+    font-size: 1.1rem;
+    padding: 0.3rem 0.5rem;
+    background: none;
+    border: none;
+    border-radius: 4px;
+    color: inherit;
+    cursor: pointer;
+  }
+  #font-list button:hover, #font-list button:focus { background: var(--list-hover); outline: none; }
+  #font-list button.selected { background: var(--list-selected); }
+  #fps { width: 5rem; }
+  label { color: var(--muted); }
+  h1 { margin: 0; font-weight: 600; }
+  .title-row {
+    align-self: stretch;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 2rem;
+  }
+  #theme {
+    display: flex;
+    font-size: 1.25rem;
+    background: none;
+    border: none;
+    padding: 0.25rem;
+    color: var(--muted);
+    cursor: pointer;
+  }
+  #theme:hover { color: var(--hover-fg); }
+  #add {
+    grid-column: 1;
+    justify-self: start;
+    /* square, same height as the inputs: 1.25rem × 1.2 line + 2 × 0.5rem padding + 2px border */
+    box-sizing: border-box;
+    width: calc(2.5rem + 2px);
+    height: calc(2.5rem + 2px);
+    padding: 0;
+    font-size: 1.25rem;
+    border-radius: 6px;
+  }
+</style>
+</head>
+<body>
+<main>
+  <div class="title-row">
+    <h1>SpinnerShop</h1>
+    <button id="theme"></button>
+  </div>
+  <label>Speed: <input id="fps" type="number" min="5" max="100" value="10"> frames/s</label>
+  <div id="rows">
+    <div class="row header">
+      <span class="frames-label">Frames</span>
+      <button id="add-col" class="font-pick" title="Add font">+</button>
+    </div>
+    <button id="add" title="Add animation">+</button>
+  </div>
+</main>
+
+  <dialog id="picker">
+    <input id="font-filter" type="text" placeholder="Filter, or type any font">
+    <div id="font-list"></div>
+  </dialog>
+
+  <dialog id="char-picker">
+    <div id="char-tab-gap"></div>
+    <div id="char-controls">
+      <select id="char-block" title="Unicode block"></select>
+      <input id="char-code" type="text" placeholder="U+2807" title="Code point (hex), Enter to insert">
+      <button id="char-delete" title="Delete character before cursor">⌫</button>
+    </div>
+    <div id="char-grid"></div>
+  </dialog>
+
+  <template id="row">
+    <div class="row">
+      <span class="text-wrap">
+        <input class="text" type="text" placeholder="chars">
+        <button class="edit" title="Insert character"></button>
+      </span>
+    </div>
+  </template>
+
+<script>
+  const rowsEl = document.getElementById('rows');
+  const rowTemplate = document.getElementById('row');
+  const fps = document.getElementById('fps');
+  const addButton = document.getElementById('add');
+  const addColButton = document.getElementById('add-col');
+  const rows = [];
+  const columns = []; // { font, header, remove }
+  const PENCIL_ICON = `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+    stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M17 3a2.85 2.85 0 0 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/><path d="m15 5 4 4"/></svg>`;
+  const TRASH_ICON = `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+    stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18"/>
+    <path d="M8 6V4a1 1 0 0 1 1-1h6a1 1 0 0 1 1 1v2"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/>
+    <path d="M10 11v6M14 11v6"/></svg>`;
+
+  function charBox(column) {
+    const box = document.createElement('div');
+    box.className = 'char';
+    box.style.fontFamily = cssFamily(column.font);
+    return box;
+  }
+
+  function addRow(value = '') {
+    const el = rowTemplate.content.firstElementChild.cloneNode(true);
+    const row = { el, text: el.querySelector('.text'), chars: [], i: 0 };
+    for (const column of columns) row.chars.push(el.appendChild(charBox(column)));
+    row.remove = el.appendChild(trashButton('Remove animation'));
+    row.remove.addEventListener('click', () => removeRow(row));
+    row.text.value = value;
+    row.text.addEventListener('input', () => { row.i = 0; fitWidth(); save(); });
+    const edit = el.querySelector('.edit');
+    edit.innerHTML = PENCIL_ICON;
+    edit.addEventListener('click', () => openCharPicker(row));
+    rows.push(row);
+    fitWidth();
+    rowsEl.insertBefore(el, addButton);
+    layoutColumns(); save();
+    row.text.focus();
+  }
+
+  function removeRow(row) {
+    rows.splice(rows.indexOf(row), 1);
+    row.el.remove();
+    fitWidth();
+    layoutColumns(); save();
+  }
+
+  function trashButton(title) {
+    const b = document.createElement('button');
+    b.className = 'trash';
+    b.title = title;
+    b.innerHTML = TRASH_ICON;
+    return b;
+  }
+
+  function addColumn(font) {
+    const column = { font, header: document.createElement('button') };
+    columns.push(column);
+    column.header.className = 'font-pick';
+    column.header.textContent = font;
+    column.header.addEventListener('click', () => openPicker(column));
+    addColButton.before(column.header);
+    column.remove = trashButton('Remove font');
+    column.remove.addEventListener('click', () => removeColumn(column));
+    rowsEl.appendChild(column.remove);
+    for (const row of rows) {
+      const box = charBox(column);
+      row.remove.before(box); // keep the row's trash last
+      row.chars.push(box);
+    }
+    layoutColumns(); save();
+    return column;
+  }
+
+  function removeColumn(column) {
+    const idx = columns.indexOf(column);
+    columns.splice(idx, 1);
+    column.header.remove();
+    column.remove.remove();
+    for (const row of rows) row.chars.splice(idx, 1)[0].remove();
+    layoutColumns(); save();
+  }
+
+  // Column trash icons share the grid row of the add-row button, each under its own column;
+  // row trash icons go in the last column, under the add-column button.
+  // Trash is hidden while only one row/column is left.
+  function layoutColumns() {
+    rowsEl.style.gridTemplateColumns = `repeat(${columns.length + 2}, auto)`;
+    columns.forEach((c, i) => { c.remove.style.gridColumn = i + 2; });
+    rows.forEach(r => { r.remove.style.gridColumn = columns.length + 2; });
+    columns.forEach(c => { c.remove.style.visibility = columns.length > 1 ? '' : 'hidden'; });
+    rows.forEach(r => { r.remove.style.visibility = rows.length > 1 ? '' : 'hidden'; });
+  }
+
+  // All inputs share the width of the longest text (monospace, so 1 char = 1ch)
+  function fitWidth() {
+    const longest = Math.max(...rows.map(r => Array.from(r.text.value).length));
+    rowsEl.style.setProperty('--text-width', `${Math.max(6, longest + 1)}ch`);
+  }
+
+  function tick() {
+    for (const row of rows) {
+      const chars = Array.from(row.text.value); // handles emoji / surrogate pairs
+      let c = '';
+      if (chars.length > 0) {
+        row.i %= chars.length;
+        c = chars[row.i++];
+      }
+      row.chars.forEach(el => { el.textContent = c; });
+    }
+    const rate = Math.min(100, Math.max(5, +fps.value || 10));
+    setTimeout(tick, 1000 / rate);
+  }
+
+  // --- Font picker ---
+  const picker = document.getElementById('picker');
+  const filter = document.getElementById('font-filter');
+  const list = document.getElementById('font-list');
+  const GENERIC = ['serif', 'sans-serif', 'monospace', 'cursive', 'fantasy'];
+  const COMMON = ['Arial', 'Courier New', 'Georgia', 'Helvetica', 'Menlo', 'Monaco',
+                  'Times New Roman', 'Trebuchet MS', 'Verdana', 'Consolas', 'Fira Code',
+                  'JetBrains Mono', 'Source Code Pro', 'SF Mono', 'Comic Sans MS', 'Impact'];
+  let fonts = COMMON.sort();
+  let fontsTitle = 'Common fonts';
+  let localFontsRequested = false;
+  let pickingFor = null;
+
+  // Typed-in system keywords; ui-* are Safari-only, so give them a fallback
+  const UI_FALLBACK = { 'ui-monospace': 'monospace', 'ui-sans-serif': 'sans-serif',
+                        'ui-serif': 'serif', 'ui-rounded': 'sans-serif', 'system-ui': 'sans-serif' };
+  const cssFamily = name => GENERIC.includes(name) ? name
+    : UI_FALLBACK[name] ? `${name}, ${UI_FALLBACK[name]}`
+    : `"${name.replace(/"/g, '')}"`;
+
+  // Replace the common list with the real installed fonts, if the browser allows it (Chromium)
+  async function loadLocalFonts() {
+    if (localFontsRequested || !('queryLocalFonts' in window)) return;
+    localFontsRequested = true;
+    try {
+      const local = [...new Set((await queryLocalFonts()).map(f => f.family))];
+      if (local.length) {
+        fonts = local.sort((a, b) => a.localeCompare(b));
+        fontsTitle = 'Installed fonts';
+        if (picker.open) renderList();
+      }
+    } catch { /* permission denied: keep the common list */ }
+  }
+
+  function renderList() {
+    const q = filter.value.trim().toLowerCase();
+    const section = (title, names) => {
+      const matches = names.filter(f => f.toLowerCase().includes(q));
+      if (!matches.length) return [];
+      const h = document.createElement('div');
+      h.className = 'section';
+      h.textContent = title;
+      return [h, ...matches.map(name => {
+        const b = document.createElement('button');
+        b.textContent = name;
+        b.style.fontFamily = cssFamily(name);
+        b.classList.toggle('selected', name === pickingFor.font);
+        b.addEventListener('click', () => applyFont(name));
+        b.addEventListener('focus', () => applyFont(name)); // arrow keys preview as you go
+        return b;
+      })];
+    };
+    list.replaceChildren(...section('CSS generic families', GENERIC), ...section(fontsTitle, fonts));
+  }
+
+  // Place the font picker to the right of the given element, kept inside the viewport
+  function anchorPicker(anchor) {
+    const a = anchor.getBoundingClientRect();
+    const gap = 8;
+    const left = Math.min(a.right + gap, innerWidth - picker.offsetWidth - gap);
+    const top = Math.max(gap, a.top);
+    picker.style.left = `${Math.max(gap, left)}px`;
+    picker.style.top = `${top}px`;
+    picker.style.maxHeight = `${innerHeight - top - gap}px`;
+  }
+
+  function applyFont(name) {
+    if (!name) return;
+    const idx = columns.indexOf(pickingFor);
+    pickingFor.font = name;
+    pickingFor.header.textContent = name;
+    save();
+    for (const row of rows) row.chars[idx].style.fontFamily = cssFamily(name);
+    anchorPicker(pickingFor.header); // header width (and centred layout) may have changed
+    list.querySelectorAll('button').forEach(b => b.classList.toggle('selected', b.textContent === name));
+  }
+
+  function openPicker(column) {
+    pickingFor = column;
+    loadLocalFonts();
+    filter.value = '';
+    renderList();
+    picker.showModal();
+    anchorPicker(column.header);
+    filter.focus();
+  }
+  filter.addEventListener('input', renderList);
+  filter.addEventListener('keydown', e => {
+    if (e.key === 'Enter') applyFont(list.querySelector('button')?.textContent ?? filter.value.trim());
+    if (e.key === 'ArrowDown') { e.preventDefault(); list.querySelector('button')?.focus(); }
+  });
+  list.addEventListener('keydown', e => {
+    const step = { ArrowDown: 1, ArrowUp: -1 }[e.key];
+    if (!step) return;
+    e.preventDefault();
+    const buttons = [...list.querySelectorAll('button')];
+    const next = buttons.indexOf(document.activeElement) + step;
+    (next < 0 ? filter : buttons[next])?.focus();
+  });
+  function closeOnBackdropClick(dialog) {
+    dialog.addEventListener('click', e => {
+      if (e.target !== dialog) return; // clicks on contents (incl. keyboard-activated) never close
+      const r = dialog.getBoundingClientRect();
+      if (e.clientX < r.left || e.clientX > r.right || e.clientY < r.top || e.clientY > r.bottom) dialog.close();
+    });
+  }
+  closeOnBackdropClick(picker);
+
+  // --- Unicode character picker (inserts at the cursor; stays open for several inserts) ---
+  const charPicker = document.getElementById('char-picker');
+  const blockSelect = document.getElementById('char-block');
+  const codeInput = document.getElementById('char-code');
+  const charGrid = document.getElementById('char-grid');
+  const BLOCKS = [
+    ['Braille Patterns', 0x2800, 0x28FF],
+    ['Box Drawing', 0x2500, 0x257F],
+    ['Block Elements', 0x2580, 0x259F],
+    ['Geometric Shapes', 0x25A0, 0x25FF],
+    ['Geometric Shapes Extended', 0x1F780, 0x1F7FF],
+    ['Arrows', 0x2190, 0x21FF],
+    ['Supplemental Arrows-A', 0x27F0, 0x27FF],
+    ['Supplemental Arrows-B', 0x2900, 0x297F],
+    ['Miscellaneous Symbols and Arrows', 0x2B00, 0x2BFF],
+    ['Dingbats', 0x2700, 0x27BF],
+    ['Miscellaneous Symbols', 0x2600, 0x26FF],
+    ['Miscellaneous Technical', 0x2300, 0x23FF],
+    ['Mathematical Operators', 0x2200, 0x22FF],
+    ['General Punctuation', 0x2000, 0x206F],
+    ['Basic Latin', 0x0020, 0x007E],
+    ['Latin-1 Supplement', 0x00A0, 0x00FF],
+    ['Symbols for Legacy Computing', 0x1FB00, 0x1FBFF],
+    ['Miscellaneous Symbols and Pictographs', 0x1F300, 0x1F5FF],
+    ['Emoticons', 0x1F600, 0x1F64F],
+  ];
+  const UNPRINTABLE = /[\p{Cn}\p{Cc}\p{Cs}\p{Co}]/u; // unassigned, control, surrogate, private use
+  const hex = cp => 'U+' + cp.toString(16).toUpperCase().padStart(4, '0');
+  let editingRow = null;
+
+  blockSelect.append(...BLOCKS.map(([name], i) => new Option(name, i)));
+  const printable = ([, from, to]) => {
+    let n = 0;
+    for (let cp = from; cp <= to; cp++) if (!UNPRINTABLE.test(String.fromCodePoint(cp))) n++;
+    return n;
+  };
+  const MAX_BLOCK_ROWS = Math.max(...BLOCKS.map(b => Math.ceil(printable(b) / 16)));
+  // Permanent room below the content for the tallest block, so the picker can always be scrolled
+  // fully into view, and the page doesn't change size when it opens or closes
+  document.body.style.paddingBottom = `calc(2rem + ${MAX_BLOCK_ROWS * 2.4 + 6}rem)`;
+
+  function renderCharGrid() {
+    const [, from, to] = BLOCKS[blockSelect.value];
+    const cells = [];
+    for (let cp = from; cp <= to; cp++) {
+      const ch = String.fromCodePoint(cp);
+      if (UNPRINTABLE.test(ch)) continue;
+      const b = document.createElement('button');
+      b.textContent = ch;
+      b.dataset.ch = ch;
+      b.title = hex(cp);
+      b.addEventListener('click', () => insertChar(ch));
+      cells.push(b);
+    }
+    charGrid.replaceChildren(...cells);
+  }
+
+  function insertChar(ch) {
+    const input = editingRow.text;
+    input.setRangeText(ch, input.selectionStart, input.selectionEnd, 'end');
+    input.dispatchEvent(new Event('input')); // restart animation, refit width, save
+    anchorCharPicker(); // input may have grown
+  }
+
+  // Like Backspace: delete the selection, or the code point before the cursor
+  function deleteChar() {
+    const input = editingRow.text;
+    let { selectionStart: start, selectionEnd: end } = input;
+    if (start === end) {
+      if (start === 0) return;
+      const before = input.value.slice(0, start);
+      start -= Array.from(before).at(-1).length; // 2 for astral chars (surrogate pairs)
+    }
+    input.setRangeText('', start, end, 'end');
+    input.dispatchEvent(new Event('input'));
+    anchorCharPicker(); // input may have shrunk
+  }
+
+  const INPUT_RADIUS = 6; // px, matches input border-radius
+  function anchorCharPicker() {
+    const wrap = editingRow.text.parentElement;
+    const a = wrap.getBoundingClientRect();
+    const left = Math.max(8, Math.min(a.left, innerWidth - charPicker.offsetWidth - 8));
+    charPicker.style.left = `${left + scrollX}px`;
+    charPicker.style.top = `${a.bottom - INPUT_RADIUS + scrollY}px`; // tuck over the input's rounded corners
+    const pencil = wrap.querySelector('.edit').getBoundingClientRect();
+    const box = charPicker.getBoundingClientRect();
+    const gap = document.getElementById('char-tab-gap');
+    // span the pencil's inside, keeping its divider line as the tab's left edge (-1: dialog border)
+    gap.style.left = `${pencil.left + 1 - box.left - 1}px`;
+    gap.style.width = `${pencil.width - 1}px`;
+  }
+
+  function openCharPicker(row) {
+    editingRow = row;
+    row.text.parentElement.querySelector('.edit').classList.add('active');
+    if (!charGrid.childElementCount) renderCharGrid();
+    charPicker.showModal();
+    anchorCharPicker();
+  }
+
+  blockSelect.addEventListener('change', renderCharGrid);
+  document.getElementById('char-delete').addEventListener('click', deleteChar);
+  codeInput.addEventListener('keydown', e => {
+    if (e.key !== 'Enter') return;
+    const cp = parseInt(codeInput.value.trim().replace(/^(U\+|0x)/i, ''), 16);
+    if (cp >= 0 && cp <= 0x10FFFF) insertChar(String.fromCodePoint(cp));
+  });
+  closeOnBackdropClick(charPicker);
+  charPicker.addEventListener('close', () => {
+    editingRow.text.parentElement.querySelector('.edit').classList.remove('active');
+  });
+
+  addButton.addEventListener('click', () => addRow());
+  addColButton.addEventListener('click', () => openPicker(addColumn('sans-serif')));
+  fps.addEventListener('input', save);
+
+  // --- Light/dark theme (defaults to the OS setting) ---
+  const themeButton = document.getElementById('theme');
+  const MOON_ICON = `<svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor">
+    <path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8Z"/></svg>`;
+  function setTheme(theme) {
+    document.documentElement.dataset.theme = theme;
+    themeButton.innerHTML = theme === 'light' ? MOON_ICON : '☀';
+    themeButton.title = theme === 'light' ? 'Switch to dark mode' : 'Switch to light mode';
+  }
+  setTheme(localStorage.getItem('spinnershop-theme')
+    ?? (matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark'));
+  themeButton.addEventListener('click', () => {
+    const theme = document.documentElement.dataset.theme === 'light' ? 'dark' : 'light';
+    localStorage.setItem('spinnershop-theme', theme);
+    setTheme(theme);
+  });
+
+  // --- Persistence (localStorage) ---
+  const STORAGE_KEY = 'spinnershop';
+  function save() {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify({
+      fps: fps.value,
+      fonts: columns.map(c => c.font),
+      frames: rows.map(r => r.text.value),
+    }));
+  }
+
+  const DEFAULTS = {
+    fps: '10',
+    fonts: ['monospace', 'serif'],
+    frames: ['|/-\\', '·✢✳✶✻✽✻✶✳✢'], // classic propeller; Claude Code spinner (ping-pong)
+  };
+  let saved = null;
+  try { saved = JSON.parse(localStorage.getItem(STORAGE_KEY)); } catch { /* corrupt: use defaults */ }
+  const state = { ...DEFAULTS, ...saved };
+  if (!state.fonts?.length) state.fonts = DEFAULTS.fonts;
+  if (!state.frames?.length) state.frames = DEFAULTS.frames;
+  fps.value = state.fps;
+  state.fonts.forEach(addColumn);
+  state.frames.forEach(f => addRow(f));
+  tick();
+</script>
+</body>
+</html>
